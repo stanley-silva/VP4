@@ -1,0 +1,8 @@
+{
+  "name": "English Speaking Coach - VP4 (Marketing Focus)",
+  "description": "An interactive English speaking coach application that uses voice input and output to help users practice and improve their English conversation skills, focusing on marketing language, with an AI tutor named VP4.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": ""
+}
