@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Message, AppState, ChallengeContext } from './types';
-import { API_KEY } from './constants';
+import { API_KEY, CONVERSATION_STARTERS } from './constants';
 import {
   initializeGemini,
   sendMessageToGeminiStream,
@@ -11,6 +11,7 @@ import {
   evaluatePronunciation
 } from './services/geminiService';
 import MessageItem from './components/MessageItem';
+import ConversationStarters from './components/ConversationStarters';
 import { GenerateContentResponse } from '@google/genai';
 
 const MicIcon: React.FC<{ className?: string }> = ({ className = "w-6 h-6" }) => (
@@ -402,10 +403,8 @@ const App: React.FC = () => {
   const toggleRecording = () => {
     if (appState === AppState.Speaking) {
       if (window.speechSynthesis.speaking) {
-        window.speechSynthesis.cancel(); // This triggers utterance.onend (which calls setAppState to Idle)
-                                         // and utterance.onerror (for 'interrupted').
-        setAppState(AppState.Idle);      // Set state immediately for responsiveness
-        // Reset challenge context if active, to ensure initial buttons are re-enabled.
+        window.speechSynthesis.cancel();
+        setAppState(AppState.Idle); 
         if (challengeContext.status !== 'idle' &&
             challengeContext.status !== 'error_generating' &&
             challengeContext.status !== 'error_evaluating') {
@@ -415,7 +414,7 @@ const App: React.FC = () => {
     } else if (appState === AppState.Recording) {
       stopRecording();
     } else if (appState === AppState.Idle || appState === AppState.Error || challengeContext.status === 'awaiting_attempt') {
-      if(appState === AppState.Error) setError(null); // Clear general error when starting new recording
+      if(appState === AppState.Error) setError(null); 
       startRecording();
     }
   };
@@ -455,20 +454,14 @@ const App: React.FC = () => {
       const introMsg = "Alright, here is your pronunciation challenge. Please read the following sentence aloud:";
       addMessage(introMsg, 'ai');
       addMessage(challengeSentenceResult, 'ai');
-      // Speak intro, then set status to awaiting_attempt after intro completes or is stopped.
-      // The speakText callback is crucial here.
       speakText(introMsg, () => {
-        // This callback runs when introMsg finishes OR is cancelled.
-        // If it was cancelled by toggleRecording, challengeContext might already be reset to idle.
-        // Only set to awaiting_attempt if still in generating_text phase (meaning not cancelled by user stop).
         setChallengeContext(prev => {
-            if(prev.status === 'generating_text'){ // Ensure it wasn't cancelled and reset by toggleRecording
+            if(prev.status === 'generating_text'){ 
                 return { status: 'awaiting_attempt', challengeText: challengeSentenceResult, error: null };
             }
-            return prev; // Keep the state if it was reset (e.g. to idle by toggleRecording)
+            return prev; 
         });
       });
-      // Set challenge text immediately for UI, status will update via speakText callback
       setChallengeContext({ status: 'generating_text', challengeText: challengeSentenceResult, error: null });
 
 
@@ -477,7 +470,7 @@ const App: React.FC = () => {
       addMessage(`Sorry, I couldn't generate a challenge right now: ${errorMsg}`, 'ai');
       speakText(`Sorry, I couldn't generate a challenge right now. Please try again later.`);
       setChallengeContext({ status: 'error_generating', challengeText: null, error: errorMsg });
-      setError(errorMsg); // Also set general error if desired
+      setError(errorMsg); 
       setAppState(AppState.Idle); 
     }
   };
@@ -488,6 +481,15 @@ const App: React.FC = () => {
       speakText(challengeContext.challengeText);
     }
   };
+
+  // handleStarterClick removed as ConversationStarters are no longer clickable
+  // const handleStarterClick = useCallback((starterText: string) => {
+  //   if (window.speechSynthesis?.speaking) {
+  //     window.speechSynthesis.cancel();
+  //     setAppState(AppState.Idle);
+  //   }
+  //   processUserSpeech(starterText);
+  // }, [processUserSpeech]);
 
   const getButtonState = () => {
     if (challengeContext.status === 'generating_text') {
@@ -557,16 +559,20 @@ const App: React.FC = () => {
   }, []);
 
    useEffect(() => {
-    // This effect can be used to clear general errors when app becomes truly idle and no challenge errors persist.
     if (appState === AppState.Idle && 
         (challengeContext.status === 'idle' || challengeContext.status === 'error_generating' || challengeContext.status === 'error_evaluating') &&
         !translatingMessageId && 
-        error && !challengeContext.error // Only clear general 'error' if there's no specific challenge error to preserve
+        error && !challengeContext.error
         ) {
-      // setError(null); // Optional: Clears general non-critical errors.
+      // setError(null); 
     }
   }, [appState, error, challengeContext.status, challengeContext.error, translatingMessageId]);
 
+
+  const showConversationStarters = !messages.some(msg => msg.sender === 'ai') &&
+                                 appState !== AppState.Initializing &&
+                                 challengeContext.status === 'idle' &&
+                                 !error;
 
   return (
     <div className="flex flex-col h-screen max-h-screen bg-slate-100 items-center justify-center p-2 sm:p-4">
@@ -597,7 +603,11 @@ const App: React.FC = () => {
             </div>
         )}
 
-        <main className="flex-grow overflow-y-auto p-3 sm:p-4 space-y-4 custom-scrollbar">
+        <main className={`flex-grow overflow-y-auto p-3 sm:p-4 custom-scrollbar ${showConversationStarters ? 'flex flex-col items-center justify-center' : 'space-y-4'}`}>
+          {showConversationStarters && (
+            // onStarterClick prop removed
+            <ConversationStarters starters={CONVERSATION_STARTERS} />
+          )}
           {messages.map((msg) => (
             <MessageItem
               key={msg.id}

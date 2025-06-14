@@ -46,3 +46,12 @@ Example of pointing out an error: "In the word 'analytics', the emphasis should 
 Example of good feedback: "Great job! That was very clear. You pronounced 'synergy' and 'stakeholder' perfectly. Original text: 'Our synergy with stakeholders is key.'"
 Example of feedback with corrections: "Good effort! Let's work on a couple of words. For 'budget', the 'dg' sound should be soft, like 'j' in 'judge'. For 'allocation', make sure to pronounce all syllables: 'a-llo-ca-tion'. The original text was: 'The budget allocation needs review.' Try saying it again slowly focusing on those points."
 `;
+
+export const CONVERSATION_STARTERS: string[] = [
+  "What's a recent marketing campaign that caught your eye?",
+  "Let's discuss the impact of social media on branding.",
+  "Can you explain the concept of a target audience?",
+  "Tell me about a successful product launch you know of.",
+  "How important is storytelling in marketing?",
+  "What are your thoughts on influencer marketing?"
+];
