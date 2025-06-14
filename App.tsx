@@ -58,9 +58,10 @@ const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.Initializing);
   const [error, setError] = useState<string | null>(null);
   const [translatingMessageId, setTranslatingMessageId] = useState<string | null>(null);
-  const [challengeContext, setChallengeContext] = useState<ChallengeContext>({ status: 'idle', challengeText: null });
+  const [challengeContext, setChallengeContext] = useState<ChallengeContext>({ status: 'idle', challengeText: null, error: null });
 
   const speechRecognitionRef = useRef<SpeechRecognition | null>(null);
+  const speechEndTimerRef = useRef<number | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
 
   const scrollToBottom = () => {
@@ -115,7 +116,6 @@ const App: React.FC = () => {
         return;
     }
 
-    // Cancel any ongoing speech before starting new one
     if (window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
     }
@@ -143,16 +143,25 @@ const App: React.FC = () => {
     }
 
     utterance.onend = () => {
-      // Check current appState before setting to Idle, to avoid race conditions if another action quickly changes state
       setAppState(current => current === AppState.Speaking ? AppState.Idle : current);
       if (callback) callback();
     };
     utterance.onerror = (event) => {
-      console.error('SpeechSynthesis Error:', event);
-      const synthesisError = (event as SpeechSynthesisErrorEvent).error || 'Unknown synthesis error';
-      setError(`Speech synthesis error: ${synthesisError}`);
-      setAppState(AppState.Error);
-      if (callback) callback();
+      const synthesisErrorEvent = event as SpeechSynthesisErrorEvent;
+      const synthesisError = synthesisErrorEvent.error || 'Unknown synthesis error';
+
+      if (synthesisError === 'interrupted') {
+        console.log('Speech synthesis was intentionally interrupted by user or app.');
+      } else {
+        console.error('SpeechSynthesis Error:', event);
+        setError(`Speech synthesis error: ${synthesisError}`);
+        setAppState(AppState.Error);
+      }
+      // For 'interrupted', onend *is* expected to fire and call the callback.
+      // For other errors, call the callback here as onend might not fire.
+      if (synthesisError !== 'interrupted' && callback) {
+        callback();
+      }
     };
     window.speechSynthesis.speak(utterance);
   }, []);
@@ -181,9 +190,8 @@ const App: React.FC = () => {
       }
       if (accumulatedText) {
         speakText(accumulatedText, () => {
-            // After AI speaks its main response, if it was part of challenge evaluation, reset challenge.
             if (challengeContext.status === 'evaluating_attempt') {
-                 setChallengeContext({ status: 'idle', challengeText: null });
+                 setChallengeContext({ status: 'idle', challengeText: null, error: null });
             }
         });
       } else {
@@ -192,10 +200,10 @@ const App: React.FC = () => {
         ));
         speakText("Sorry, I couldn't process that.", () => {
             if (challengeContext.status === 'evaluating_attempt') {
-                 setChallengeContext({ status: 'idle', challengeText: null });
+                 setChallengeContext({ status: 'idle', challengeText: null, error: null });
             }
         });
-        setAppState(AppState.Idle);
+        setAppState(AppState.Idle); 
       }
     } catch (e) {
         console.error("Error processing AI stream:", e);
@@ -206,7 +214,7 @@ const App: React.FC = () => {
         ));
         speakText(`Sorry, an error occurred while I was thinking.`, () => {
              if (challengeContext.status === 'evaluating_attempt') {
-                 setChallengeContext({ status: 'idle', challengeText: null }); // Reset on error too
+                 setChallengeContext({ status: 'idle', challengeText: null, error: null });
             }
         });
         setAppState(AppState.Error);
@@ -228,11 +236,8 @@ const App: React.FC = () => {
       const evaluationResult = await evaluatePronunciation(challengeContext.challengeText, transcript);
       if (typeof evaluationResult === 'string') {
         addMessage(evaluationResult, 'ai');
-        // Speech and challenge reset will be handled by handleAiResponseStream's speakText callback
-        // or by speakText directly if we don't stream evaluation.
-        // For simplicity, let's assume evaluation is not streamed and speakText handles callback.
         speakText(evaluationResult, () => {
-          setChallengeContext({ status: 'idle', challengeText: null });
+          setChallengeContext({ status: 'idle', challengeText: null, error: null });
         });
       } else {
         const errorMsg = evaluationResult.error || "Failed to evaluate pronunciation.";
@@ -252,6 +257,8 @@ const App: React.FC = () => {
     if (!isGeminiInitialized()) {
       setError("Gemini service is not ready.");
       setAppState(AppState.Error);
+      addMessage("Sorry, I'm having trouble connecting. Please try again later.", 'ai');
+      speakText("Sorry, I'm having trouble connecting. Please try again later.");
       return;
     }
 
@@ -267,22 +274,36 @@ const App: React.FC = () => {
     }
   }, [handleAiResponseStream, speakText, challengeContext]);
 
+  const stopRecording = useCallback(() => {
+    if (speechEndTimerRef.current) {
+      clearTimeout(speechEndTimerRef.current);
+      speechEndTimerRef.current = null;
+    }
+    if (speechRecognitionRef.current && appState === AppState.Recording) {
+      speechRecognitionRef.current.stop();
+    }
+  }, [appState]);
 
   const startRecording = useCallback(() => {
     if (appState !== AppState.Idle && appState !== AppState.Error && challengeContext.status !== 'awaiting_attempt') return;
 
     if (window.speechSynthesis?.speaking) {
-        window.speechSynthesis.cancel();
+        window.speechSynthesis.cancel(); 
     }
 
     setError(null);
-    setChallengeContext(prev => ({...prev, error: null}));
+    setChallengeContext(prev => ({...prev, error: null})); // Clear previous challenge error on new recording attempt
 
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) {
         setError("Speech recognition not supported in this browser.");
         setAppState(AppState.Error);
         return;
+    }
+    
+    if (speechEndTimerRef.current) { 
+        clearTimeout(speechEndTimerRef.current);
+        speechEndTimerRef.current = null;
     }
 
     setAppState(AppState.Recording);
@@ -291,9 +312,32 @@ const App: React.FC = () => {
     const recognition = speechRecognitionRef.current;
     recognition.lang = 'en-US';
     recognition.interimResults = false;
-    recognition.continuous = false;
+    recognition.continuous = false; 
+
+    recognition.onspeechstart = () => {
+      if (speechEndTimerRef.current) {
+        clearTimeout(speechEndTimerRef.current);
+        speechEndTimerRef.current = null;
+      }
+    };
+
+    recognition.onspeechend = () => {
+      if (speechEndTimerRef.current) {
+        clearTimeout(speechEndTimerRef.current);
+      }
+      speechEndTimerRef.current = window.setTimeout(() => {
+        if (speechRecognitionRef.current && appState === AppState.Recording) {
+          console.log("Speech end timer expired, stopping recognition.");
+          speechRecognitionRef.current.stop();
+        }
+      }, 2500); 
+    };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      if (speechEndTimerRef.current) {
+        clearTimeout(speechEndTimerRef.current);
+        speechEndTimerRef.current = null;
+      }
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (transcript) {
         processUserSpeech(transcript);
@@ -302,11 +346,15 @@ const App: React.FC = () => {
             addMessage("I didn't hear your attempt for the challenge. Try recording again.", 'ai');
             speakText("I didn't hear your attempt for the challenge. Try recording again.");
         }
-        setAppState(AppState.Idle);
+        setAppState(AppState.Idle); 
       }
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      if (speechEndTimerRef.current) {
+        clearTimeout(speechEndTimerRef.current);
+        speechEndTimerRef.current = null;
+      }
       console.error('SpeechRecognition Error:', event.error, event.message);
       let errorMessage = `Speech recognition error: ${event.error}. ${event.message || ''}`.trim();
       if (event.error === 'no-speech') {
@@ -336,6 +384,10 @@ const App: React.FC = () => {
     };
 
     recognition.onend = () => {
+      if (speechEndTimerRef.current) { 
+          clearTimeout(speechEndTimerRef.current);
+          speechEndTimerRef.current = null;
+      }
       setAppState(currentAppState => {
         if (currentAppState === AppState.Recording) {
           return AppState.Idle;
@@ -346,25 +398,32 @@ const App: React.FC = () => {
     recognition.start();
   }, [appState, processUserSpeech, speakText, challengeContext.status]);
 
-  const stopRecording = useCallback(() => {
-    if (speechRecognitionRef.current && appState === AppState.Recording) {
-      speechRecognitionRef.current.stop();
-    }
-  }, [appState]);
 
   const toggleRecording = () => {
-    if (appState === AppState.Recording) {
+    if (appState === AppState.Speaking) {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel(); // This triggers utterance.onend (which calls setAppState to Idle)
+                                         // and utterance.onerror (for 'interrupted').
+        setAppState(AppState.Idle);      // Set state immediately for responsiveness
+        // Reset challenge context if active, to ensure initial buttons are re-enabled.
+        if (challengeContext.status !== 'idle' &&
+            challengeContext.status !== 'error_generating' &&
+            challengeContext.status !== 'error_evaluating') {
+          setChallengeContext({ status: 'idle', challengeText: null, error: null });
+        }
+      }
+    } else if (appState === AppState.Recording) {
       stopRecording();
     } else if (appState === AppState.Idle || appState === AppState.Error || challengeContext.status === 'awaiting_attempt') {
-      if(appState === AppState.Error) setError(null);
+      if(appState === AppState.Error) setError(null); // Clear general error when starting new recording
       startRecording();
     }
   };
 
   const handleTranslate = useCallback(async (messageId: string, textToTranslate: string) => {
     setTranslatingMessageId(messageId);
-    const originalError = error;
-    setError(null);
+    const originalError = error; 
+    setError(null); 
 
     const translationResult = await translateTextToPortuguese(textToTranslate);
 
@@ -374,23 +433,19 @@ const App: React.FC = () => {
           msg.id === messageId ? { ...msg, translatedText: translationResult } : msg
         )
       );
+      if (originalError && !error) setError(originalError); 
     } else {
-      console.error("Translation failed:", translationResult.error);
-      setError(translationResult.error || "Failed to translate message.");
+      const translationErrorMsg = translationResult.error || "Failed to translate message.";
+      console.error("Translation failed:", translationErrorMsg);
+      setError(translationErrorMsg); 
     }
     setTranslatingMessageId(null);
-    if(typeof translationResult !== 'string' && originalError && !error) {
-        setError(originalError);
-    } else if (typeof translationResult !== 'string' && !error) {
-         setError(`Failed to translate: ${translationResult.error}`);
-    }
   }, [error]);
 
   const handleStartPronunciationChallenge = async () => {
-    // Check if the button should be enabled before proceeding
     if (isPronunciationChallengeButtonDisabled) return;
 
-    setChallengeContext({ status: 'generating_text', challengeText: null });
+    setChallengeContext({ status: 'generating_text', challengeText: null, error: null });
     setError(null);
     if(window.speechSynthesis?.speaking) window.speechSynthesis.cancel();
 
@@ -400,15 +455,30 @@ const App: React.FC = () => {
       const introMsg = "Alright, here is your pronunciation challenge. Please read the following sentence aloud:";
       addMessage(introMsg, 'ai');
       addMessage(challengeSentenceResult, 'ai');
-      speakText(introMsg); // VP4 only speaks the intro, not the challenge sentence itself initially
-      setChallengeContext({ status: 'awaiting_attempt', challengeText: challengeSentenceResult });
+      // Speak intro, then set status to awaiting_attempt after intro completes or is stopped.
+      // The speakText callback is crucial here.
+      speakText(introMsg, () => {
+        // This callback runs when introMsg finishes OR is cancelled.
+        // If it was cancelled by toggleRecording, challengeContext might already be reset to idle.
+        // Only set to awaiting_attempt if still in generating_text phase (meaning not cancelled by user stop).
+        setChallengeContext(prev => {
+            if(prev.status === 'generating_text'){ // Ensure it wasn't cancelled and reset by toggleRecording
+                return { status: 'awaiting_attempt', challengeText: challengeSentenceResult, error: null };
+            }
+            return prev; // Keep the state if it was reset (e.g. to idle by toggleRecording)
+        });
+      });
+      // Set challenge text immediately for UI, status will update via speakText callback
+      setChallengeContext({ status: 'generating_text', challengeText: challengeSentenceResult, error: null });
+
+
     } else {
       const errorMsg = challengeSentenceResult.error || "Failed to generate challenge.";
       addMessage(`Sorry, I couldn't generate a challenge right now: ${errorMsg}`, 'ai');
       speakText(`Sorry, I couldn't generate a challenge right now. Please try again later.`);
       setChallengeContext({ status: 'error_generating', challengeText: null, error: errorMsg });
-      setError(errorMsg);
-      setAppState(AppState.Error);
+      setError(errorMsg); // Also set general error if desired
+      setAppState(AppState.Idle); 
     }
   };
 
@@ -443,7 +513,7 @@ const App: React.FC = () => {
       case AppState.Processing:
         return { text: "VP4 is thinking...", icon: <SpinnerIcon className="w-5 h-5" />, disabled: true, bgColor: "bg-orange-500 text-white" };
       case AppState.Speaking:
-        return { text: "VP4 is speaking...", icon: <SpeakerIcon className="w-5 h-5" />, disabled: true, bgColor: "bg-red-500 text-white" };
+        return { text: "Stop Speaking", icon: <StopIcon className="w-5 h-5" />, disabled: false, bgColor: "bg-yellow-500 hover:bg-yellow-600 text-white" };
       case AppState.Error:
          return { text: "Retry Speaking", icon: <MicIcon className="w-5 h-5" />, disabled: false, bgColor: "bg-orange-600 hover:bg-orange-700 text-white" };
       default:
@@ -457,7 +527,7 @@ const App: React.FC = () => {
     appState === AppState.Initializing ||
     appState === AppState.Recording ||
     appState === AppState.Processing ||
-    appState === AppState.Speaking ||
+    appState === AppState.Speaking || 
     (challengeContext.status !== 'idle' &&
      challengeContext.status !== 'error_generating' &&
      challengeContext.status !== 'error_evaluating') ||
@@ -470,16 +540,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadVoices = () => {
         if (window.speechSynthesis) {
-          window.speechSynthesis.getVoices();
+          window.speechSynthesis.getVoices(); 
         }
     };
     if ('speechSynthesis' in window && window.speechSynthesis) {
         if (window.speechSynthesis.getVoices().length === 0) {
             window.speechSynthesis.onvoiceschanged = loadVoices;
-            loadVoices();
-        } else {
-            loadVoices();
         }
+        loadVoices(); 
     }
     return () => {
         if ('speechSynthesis' in window && window.speechSynthesis) {
@@ -489,15 +557,15 @@ const App: React.FC = () => {
   }, []);
 
    useEffect(() => {
-    if (error && appState !== AppState.Error &&
-        challengeContext.status !== 'error_generating' &&
-        challengeContext.status !== 'error_evaluating') {
-      // Consider clearing general error if app state changes from error
-      // and challenge isn't in an error state.
-      // This logic can be fine-tuned based on desired error recovery behavior.
-      // Example: setError(null);
+    // This effect can be used to clear general errors when app becomes truly idle and no challenge errors persist.
+    if (appState === AppState.Idle && 
+        (challengeContext.status === 'idle' || challengeContext.status === 'error_generating' || challengeContext.status === 'error_evaluating') &&
+        !translatingMessageId && 
+        error && !challengeContext.error // Only clear general 'error' if there's no specific challenge error to preserve
+        ) {
+      // setError(null); // Optional: Clears general non-critical errors.
     }
-  }, [appState, error, challengeContext.status]);
+  }, [appState, error, challengeContext.status, challengeContext.error, translatingMessageId]);
 
 
   return (
@@ -507,13 +575,18 @@ const App: React.FC = () => {
           <h1 className="text-xl sm:text-2xl font-bold">English Speaking Coach - VP4</h1>
         </header>
 
-        {(error && (appState === AppState.Error || appState === AppState.Idle || translatingMessageId || challengeContext.error)) && (
+        {(error || (challengeContext.error && 
+          (challengeContext.status === 'error_generating' || challengeContext.status === 'error_evaluating'))) && (
           <div className="p-3 sm:p-4 bg-red-100 border-l-4 border-red-500 text-red-700">
             <p className="font-bold">Error</p>
-            <p className="text-sm">{error}</p>
-            {challengeContext.error && challengeContext.status.startsWith('error_') && <p className="text-xs mt-1">Challenge error: {challengeContext.error}</p>}
+            {error && <p className="text-sm">{error}</p>}
+            {challengeContext.error && !error && 
+             (challengeContext.status === 'error_generating' || challengeContext.status === 'error_evaluating') &&
+              <p className="text-sm">Challenge error: {challengeContext.error}</p>
+            }
           </div>
         )}
+
 
         {appState === AppState.Initializing && !error && (
              <div className="flex-grow flex items-center justify-center p-4">
@@ -568,10 +641,12 @@ const App: React.FC = () => {
           </div>
           <button
             onClick={toggleRecording}
-            disabled={mainButtonState.disabled || !!translatingMessageId || challengeContext.status === 'generating_text' || challengeContext.status === 'evaluating_attempt' || appState === AppState.Speaking}
-            className={`w-full flex items-center justify-center gap-2 font-medium py-3 px-4 rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 ${mainButtonState.bgColor} ${(mainButtonState.disabled || !!translatingMessageId || challengeContext.status === 'generating_text' || challengeContext.status === 'evaluating_attempt' || appState === AppState.Speaking) ? 'opacity-70 cursor-not-allowed' : ''} focus:ring-red-400`}
+            disabled={mainButtonState.disabled || !!translatingMessageId || challengeContext.status === 'generating_text' || challengeContext.status === 'evaluating_attempt'}
+            className={`w-full flex items-center justify-center gap-2 font-medium py-3 px-4 rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 ${mainButtonState.bgColor} ${
+              (mainButtonState.disabled || !!translatingMessageId || challengeContext.status === 'generating_text' || challengeContext.status === 'evaluating_attempt') ? 'opacity-70 cursor-not-allowed' : ''
+            } focus:ring-red-400`}
             aria-label={mainButtonState.text}
-            title={(translatingMessageId ? "Please wait for translation to complete" : appState === AppState.Speaking ? "VP4 is speaking..." : mainButtonState.text)}
+            title={(translatingMessageId ? "Please wait for translation to complete" : mainButtonState.text)}
           >
             {mainButtonState.icon}
             <span>{mainButtonState.text}</span>
