@@ -31,14 +31,19 @@
           scrollbar-color: #9ca3af #e5e7eb; /* thumb and track */
         }
 
-        /* Animation for VP4's digital face mouth - REMOVED */
-        /* @keyframes mouthAnimation {
-            0%, 100% { transform: scaleY(0.3); }
-            50% { transform: scaleY(1); }
+        @keyframes animateGradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
         }
-        .animate-mouth-speak {
-            animation: mouthAnimation 0.5s infinite ease-in-out;
-        } */
+        .animated-header-gradient {
+            /* Vibrant red/rose gradient */
+            background: linear-gradient(270deg, #ef4444, #f43f5e, #dc2626, #be123c, #e11d48);
+            background-size: 300% 300%; /* Increased size for smoother transition over more colors */
+            animation: animateGradient 18s ease infinite;
+            position: relative; /* Kept for z-index stacking context if needed */
+        }
+
     </style>
 <script type="importmap">
 {

@@ -483,13 +483,6 @@ const App: React.FC = () => {
   };
 
   // handleStarterClick removed as ConversationStarters are no longer clickable
-  // const handleStarterClick = useCallback((starterText: string) => {
-  //   if (window.speechSynthesis?.speaking) {
-  //     window.speechSynthesis.cancel();
-  //     setAppState(AppState.Idle);
-  //   }
-  //   processUserSpeech(starterText);
-  // }, [processUserSpeech]);
 
   const getButtonState = () => {
     if (challengeContext.status === 'generating_text') {
@@ -577,8 +570,8 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen max-h-screen bg-slate-100 items-center justify-center p-2 sm:p-4">
       <div className="w-full max-w-2xl h-full flex flex-col bg-white shadow-2xl rounded-xl overflow-hidden">
-        <header className="bg-gradient-to-r from-red-600 to-rose-700 p-4 text-white text-center shadow-md">
-          <h1 className="text-xl sm:text-2xl font-bold">English Speaking Coach - VP4</h1>
+        <header className="animated-header-gradient p-4 text-white text-center shadow-md">
+          <h1 className="text-xl sm:text-2xl font-bold relative z-10">VP4</h1>
         </header>
 
         {(error || (challengeContext.error && 
@@ -605,7 +598,6 @@ const App: React.FC = () => {
 
         <main className={`flex-grow overflow-y-auto p-3 sm:p-4 custom-scrollbar ${showConversationStarters ? 'flex flex-col items-center justify-center' : 'space-y-4'}`}>
           {showConversationStarters && (
-            // onStarterClick prop removed
             <ConversationStarters starters={CONVERSATION_STARTERS} />
           )}
           {messages.map((msg) => (
