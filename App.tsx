@@ -123,24 +123,72 @@ const App: React.FC = () => {
 
     setAppState(AppState.Speaking);
     const utterance = new window.SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
+    utterance.lang = 'en-US'; // Target language for the utterance
 
     const voices = window.speechSynthesis.getVoices();
-    const googleUSEnglishVoice = voices.find(voice => voice.name === 'Google US English' && voice.lang === 'en-US');
-    let selectedVoice = googleUSEnglishVoice;
+    let selectedVoice: SpeechSynthesisVoice | undefined = undefined;
 
+    const preferredUSEnglishVoices = [
+        "Google US English",
+        "Microsoft David Desktop - English (United States)",
+        "Microsoft Zira Desktop - English (United States)",
+        "Alex", 
+        "Samantha",
+    ];
+
+    const qualityKeywords = ["neural", "enhanced", "siri", "premium", "desktop", "wave"];
+
+    // 1. Try preferred en-US voices by exact name
+    for (const name of preferredUSEnglishVoices) {
+        selectedVoice = voices.find(voice => voice.name === name && voice.lang === 'en-US');
+        if (selectedVoice) break;
+    }
+
+    // 2. Try en-US voices containing quality keywords
     if (!selectedVoice) {
-        const maleVoice = voices.find(voice => voice.lang === 'en-US' && voice.name.toLowerCase().includes('male'));
-        if (maleVoice) {
-            selectedVoice = maleVoice;
-        } else {
-            const englishVoice = voices.find(voice => voice.lang === 'en-US' || voice.lang.startsWith('en-'));
-            if(englishVoice) selectedVoice = englishVoice;
+        for (const keyword of qualityKeywords) {
+            selectedVoice = voices.find(voice =>
+                voice.lang === 'en-US' && voice.name.toLowerCase().includes(keyword)
+            );
+            if (selectedVoice) break;
         }
+    }
+    
+    // 3. Try default en-US voice
+    if (!selectedVoice) {
+        selectedVoice = voices.find(voice => voice.lang === 'en-US' && voice.default);
+    }
+
+    // 4. Try any en-US voice
+    if (!selectedVoice) {
+        selectedVoice = voices.find(voice => voice.lang === 'en-US');
+    }
+
+    // 5. Fallback: Try other English voices with quality keywords
+    if (!selectedVoice) {
+        for (const keyword of qualityKeywords) {
+            selectedVoice = voices.find(voice =>
+                voice.lang.startsWith('en-') && voice.name.toLowerCase().includes(keyword)
+            );
+            if (selectedVoice) break;
+        }
+    }
+
+    // 6. Fallback: Try default for any English locale
+    if (!selectedVoice) {
+        selectedVoice = voices.find(voice => voice.lang.startsWith('en-') && voice.default);
+    }
+    
+    // 7. Fallback: Try any other English voice
+    if (!selectedVoice) {
+        selectedVoice = voices.find(voice => voice.lang.startsWith('en-'));
     }
 
     if (selectedVoice) {
         utterance.voice = selectedVoice;
+        console.log(`TTS: Using voice: ${selectedVoice.name} (${selectedVoice.lang}) for text: "${text.substring(0,50)}..."`);
+    } else {
+        console.warn(`TTS: No suitable English voice found. Using browser default for en-US for text: "${text.substring(0,50)}..."`);
     }
 
     utterance.onend = () => {
@@ -152,14 +200,12 @@ const App: React.FC = () => {
       const synthesisError = synthesisErrorEvent.error || 'Unknown synthesis error';
 
       if (synthesisError === 'interrupted') {
-        console.log('Speech synthesis was intentionally interrupted by user or app.');
+        console.log('Speech synthesis was intentionally interrupted.');
       } else {
         console.error('SpeechSynthesis Error:', event);
         setError(`Speech synthesis error: ${synthesisError}`);
         setAppState(AppState.Error);
       }
-      // For 'interrupted', onend *is* expected to fire and call the callback.
-      // For other errors, call the callback here as onend might not fire.
       if (synthesisError !== 'interrupted' && callback) {
         callback();
       }
@@ -293,7 +339,7 @@ const App: React.FC = () => {
     }
 
     setError(null);
-    setChallengeContext(prev => ({...prev, error: null})); // Clear previous challenge error on new recording attempt
+    setChallengeContext(prev => ({...prev, error: null})); 
 
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionAPI) {
@@ -482,8 +528,6 @@ const App: React.FC = () => {
     }
   };
 
-  // handleStarterClick removed as ConversationStarters are no longer clickable
-
   const getButtonState = () => {
     if (challengeContext.status === 'generating_text') {
       return { text: "Generating Challenge...", icon: <SpinnerIcon className="w-5 h-5" />, disabled: true, bgColor: "bg-orange-500" };
@@ -535,13 +579,17 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadVoices = () => {
         if (window.speechSynthesis) {
-          window.speechSynthesis.getVoices(); 
+          // Calling getVoices() is important for some browsers to populate the list,
+          // and for onvoiceschanged to fire consistently.
+          const voices = window.speechSynthesis.getVoices();
+          console.log("Available TTS voices:", voices.length);
         }
     };
     if ('speechSynthesis' in window && window.speechSynthesis) {
-        if (window.speechSynthesis.getVoices().length === 0) {
-            window.speechSynthesis.onvoiceschanged = loadVoices;
-        }
+        // Voices might be loaded asynchronously.
+        // onvoiceschanged event fires when the list of voices is ready.
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+        // Call it once explicitly in case voices are already loaded
         loadVoices(); 
     }
     return () => {
@@ -557,7 +605,7 @@ const App: React.FC = () => {
         !translatingMessageId && 
         error && !challengeContext.error
         ) {
-      // setError(null); 
+      // setError(null); // Example: Clearing general error if specific conditions are met
     }
   }, [appState, error, challengeContext.status, challengeContext.error, translatingMessageId]);
 
